@@ -2,11 +2,15 @@ package gatlingguns;
 
 import robocode.*;
 import robocode.util.Utils;
+import sun.security.ec.point.Point;
 
+import java.awt.*;
 import java.awt.geom.Point2D;
 import java.awt.geom.RoundRectangle2D;
 import java.util.ArrayList;
+import java.util.LinkedList;
 import java.util.List;
+import java.util.Stack;
 
 public class OneVersusOneGatlingGunsBot extends AdvancedRobot {
 
@@ -51,8 +55,8 @@ public class OneVersusOneGatlingGunsBot extends AdvancedRobot {
         setTurnRadarRightRadians(Utils.normalRelativeAngle(radarTurn));
 
         // find our enemy's location:
-        double ex = getX() + Math.sin(absBearing) * e.getDistance();
-        double ey = getY() + Math.cos(absBearing) * e.getDistance();
+        double ex = enemyLocation.getX();
+        double ey = enemyLocation.getY();
 
         // Let's process the waves now:
         for (int i=0; i < waves.size(); i++)
@@ -65,7 +69,8 @@ public class OneVersusOneGatlingGunsBot extends AdvancedRobot {
             }
         }
 
-        double power = Math.min(3, Math.max(.1, calculateBulletPower(e.getDistance())));
+//        double power = Math.min(3, Math.max(.1, calculateBulletPower(e.getDistance())));
+        double power = 0.5;
         // don't try to figure out the direction they're moving
         // they're not moving, just use the direction we had before
         if (e.getVelocity() != 0)
@@ -200,5 +205,65 @@ public class OneVersusOneGatlingGunsBot extends AdvancedRobot {
             }
             return false;
         }
+    }
+
+    class Predictor {
+
+        Info[] infos = new Info[100];
+
+        Predictor() {
+
+        }
+
+        Point2D getLocation(int turn) {
+            Info info = infos[turn];
+            if (info == null) {
+                info = new Info();
+            }
+            if (info.actual != null) {
+                return info.actual;
+            }
+            if (info.predicted != null) {
+                return info.predicted;
+            }
+            //predict?
+            //check turn if it's turn no 1, 2, or 3
+
+            Point2D previous = getLocation(turn-1);
+            Point2D previousPrevious = getLocation(turn-2);
+            //first pos = a
+            //second pos = b
+            //(x-a.x)/(b.x-a.x) = (y-a.y)/(b.y-a.y)
+            //c.x = b.x + (b.x - a.x)
+            //c.y = 2b.y - a.y
+            info.predicted = new Point2D.Double(2*previous.getX() - previousPrevious.getX(),
+                    2*previous.getY() - previousPrevious.getY());
+
+            infos[turn] = info;
+            return info.predicted;
+        }
+
+        void update(int turn, Point2D actual, double energy, double heading, double velocity) {
+            //get info
+            Info info = infos[turn];
+            if (info == null) {
+                info = new Info();
+            }
+            info.actual = actual;
+            info.energy = energy;
+            info.heading = heading;
+            info.velocity = velocity;
+
+            infos[turn] = info;
+        }
+    }
+
+    class Info {
+        Point2D predicted;
+        Point2D actual;
+        double energy;
+        double heading;
+        double velocity;
+
     }
 }

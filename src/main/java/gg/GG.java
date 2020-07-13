@@ -33,6 +33,7 @@ public class GG extends AdvancedRobot {
             EnemyInfo enemy = vm.enemyToShoot();
 
             //rotate and fire gun based on enemyToShoot
+            //this is wrong
             turnGunRight(enemy.angle);
             fire(1); //maybe we can set the bullet power based on enemy's distance
 
