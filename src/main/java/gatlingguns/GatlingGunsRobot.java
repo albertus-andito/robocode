@@ -33,22 +33,26 @@ public class GatlingGunsRobot extends AdvancedRobot {
         setTurnRadarRightRadians(Double.POSITIVE_INFINITY);
 
         while (isAlive) {
+            out.println("In loop: " + getTime());
             switch (map.enemiesCount()) {
                 case 0: // no enemy detected yet
+                    out.println("move to center");
                     moveToCenter();
                     break;
 
                 case 1: // only one enemy on radar
-                    aim();
-                    moveToEnemyBack();
+                    out.println("move to enemy back");
+                    moveToEnemyBack(map.getEnemies().iterator().next());
                     break;
 
                 default: // many enemies
-                    aim();
+                    out.println("move to edge");
+//                    aim();
                     moveToEdge();
             }
-
-            scan();
+            out.println("before scanning");
+            execute();
+            out.println("after scanning");
         }
     }
 
@@ -56,57 +60,52 @@ public class GatlingGunsRobot extends AdvancedRobot {
         return new Point2D.Double(getX(), getY());
     }
 
-    public void aim() {
+    public Predictor aim() {
+        out.println("aiming");
         long currentTurn = getTime();
         Point2D self = getOwnPosition();
         Predictor predictor = map.getNearest(self);
 
         Point2D aimingPoint = predictor.getPosition(currentTurn + 1);
         if (aimingPoint != null) {
+            out.println("aiming point is " +aimingPoint);
             double distance = calcDistance(self, aimingPoint);
             int tau = (int) Math.round(distance / 17.0);
             Point2D goal = predictor.getPosition(currentTurn + tau);
-            double angle = calcHeading(self, goal);
-            if (equ(angle, getGunHeadingRadians(), 0.01)) {
+            double angle = getHeadingRadians() + calcHeading(self, goal) - getGunHeadingRadians();
+            out.println("angle is " + angle);
+            out.println("gun angle is " + getGunHeadingRadians());
+            if (equ(angle, 0, 0.01)) {
+                out.println("firing");
                 setFire(0.5);
             } else {
                 setTurnGunRightRadians(angle);
             }
         }
+        return predictor;
+    }
+
+    public void moveTo(Point2D point) {
+        Point2D self = getOwnPosition();
+        double dx = point.getX() - self.getX();
+        double dy = point.getY() - self.getY();
+        double distance = Math.sqrt(dx*dx + dy*dy);
+        double angle = Math.acos(dy/distance);
+        setTurnRightRadians(angle);
+        setAhead(distance);
     }
 
     public void moveToCenter() {
-        Point2D self = getOwnPosition();
-        Point2D center = map.getCenter();
-        double angle = 0.0;
-
-        if (equ(self.getX(), center.getX(), 0.01)) {
-            if (self.getY() > center.getY()) {
-                angle = Math.PI;
-            }
-            if (self.getY() < center.getY()) {
-                angle = 0.0;
-            }
-        } else if (equ(self.getY(), center.getY(), 0.01)) {
-            if (self.getX() > center.getX()) {
-                angle = - Math.PI / 2;
-            }
-            if (self.getX() < center.getX()) {
-                angle = Math.PI / 2;
-            }
-        } else {
-            angle = calcHeading(self, center);
-        }
-
-        double distance = calcDistance(self, center);
-
-        turnRightRadians(angle);
-        ahead(distance);
+        moveTo(map.getCenter());
     }
 
-    public void moveToEnemyBack() {
-        // TODO: TBD
-        moveToCenter(); // temporaly
+    public void moveToEnemyBack(Predictor predictor) {
+        Point2D point1 = predictor.getPosition(getTime());
+        Point2D point2 = predictor.getPosition(getTime() + 1);
+
+        double dx = point2.getX() - point1.getX();
+        double dy = point2.getY() - point1.getY();
+        moveTo(new Point2D.Double(point1.getX() - dx*5, point1.getY() - dy*5));
     }
 
     public void moveToEdge() {
@@ -190,6 +189,7 @@ public class GatlingGunsRobot extends AdvancedRobot {
     class Predictor {
         private static final int PREDICTOR_SIZE = 1_000;
         private final RobotInfo[] infos = new RobotInfo[PREDICTOR_SIZE];
+        private RobotInfo lastInfo;
 
         int calcIndex(long turn) {
             while (turn < 0) {
@@ -216,31 +216,40 @@ public class GatlingGunsRobot extends AdvancedRobot {
         }
 
         void update(Point2D detected, double energy, double heading, double velocity) {
+            out.println("update info");
             RobotInfo info = getInfoOrNew(getTime());
             info.detected = detected;
             info.energy = energy;
             info.heading = heading;
             info.velocity = velocity;
+            lastInfo = info;
+            putInfo(getTime(), info);
         }
 
         Point2D getPosition(long turn) {
+            out.println("Predict for turn " + turn);
+            if(getTime() + 10 < turn) {
+                turn = getTime() + 10;
+            }
             RobotInfo info = getInfoOrNew(turn);
 
             if (info.detected != null) {
+                out.println("return detected");
                 return info.detected;
             }
 
             if (info.predicted != null) {
+                out.println("return predicted");
                 return info.predicted;
             }
 
             if(turn == 0) {
-                return null;
+                return lastInfo.detected;
             }
             if(turn == 1) {
                 RobotInfo pos0 = getInfo(0);
                 if(pos0 == null) {
-                    return null;
+                    return lastInfo.detected;
                 }
                 return addPoints(pos0.detected, scalar(pos0.heading, pos0.velocity));
             }
@@ -248,6 +257,7 @@ public class GatlingGunsRobot extends AdvancedRobot {
             info.predicted = predictor(getPosition(turn - 1), getPosition(turn - 2));
             putInfo(turn, info);
 
+            out.println("predicted");
             return info.predicted;
         }
 
@@ -310,23 +320,13 @@ public class GatlingGunsRobot extends AdvancedRobot {
      */
     double calcHeading(Point2D self, Point2D target) {
         Point2D goal = subPoints(target, self);
-        double dx = Math.abs(goal.getX());
         double dy = Math.abs(goal.getY());
-        if (equ(dx, 0.0, 0.001)) {
-            return goal.getY() > 0.0 ? 0.0 : PI;
-        }
-        if (equ(dy, 0.0, 0.001)) {
-            return goal.getX() > 0.0 ? PI / 2 : - PI/2;
-        }
-        double angle = Math.atan(dx / dy);
-        if (goal.getX() > 0.0) {
-            return goal.getY() > 0.0 ? angle : PI - angle;
-        } else {
-            return goal.getY() > 0.0 ? PI2 - angle : PI + angle;
-        }
+        return Math.acos(dy / calcDistance(self, target));
     }
 
     double calcDistance(Point2D self, Point2D target) {
-        return Math.sqrt(Math.pow(self.getX() - target.getX(), 2) + Math.pow(self.getY() - target.getY(), 2));
+        double dx = self.getX() - target.getX();
+        double dy = self.getY() - target.getY();
+        return Math.sqrt(dx*dx + dy*dy);
     }
 }
