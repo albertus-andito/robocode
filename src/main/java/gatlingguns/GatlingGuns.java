@@ -1,14 +1,18 @@
 package gatlingguns;
 
+import gatlingguns.GatlingGunsRobot.Predictor;
 import robocode.*;
 import robocode.util.Utils;
 
 import java.awt.geom.Point2D;
 import java.awt.geom.RoundRectangle2D;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
-public class OneVersusOneGatlingGunsBot extends AdvancedRobot {
+public class GatlingGuns extends AdvancedRobot {
 
     List<GatlingGuns.WaveBullet> waves = new ArrayList<GatlingGuns.WaveBullet>();
     static int[] stats = new int[31]; // 31 is the number of unique GuessFactors we're using
@@ -24,6 +28,8 @@ public class OneVersusOneGatlingGunsBot extends AdvancedRobot {
     double enemyAbsoluteBearing;
     double movementLateralAngle = 0.2;
 
+    private VirtualMap map = new VirtualMap();
+
     //how to get turn?
     int currentTurn = 0;
 
@@ -33,25 +39,57 @@ public class OneVersusOneGatlingGunsBot extends AdvancedRobot {
         setAdjustGunForRobotTurn(true);
         setAdjustRadarForGunTurn(true);
 
-        turnRadarRightRadians(Double.POSITIVE_INFINITY);
+        setTurnRadarRightRadians(Double.POSITIVE_INFINITY);
+        Predictor predictor;
         do {
+            out.println("loop no " + getTime());
+            switch (map.enemies.size()) {
+                case 0: // no enemy detected yet
+                    out.println("move to center");
+                    moveToCenter();
+                    break;
+
+                case 1: // only one enemy on radar
+                    out.println("move to enemy back");
+                    predictor = map.enemies.values().iterator().next();
+                    moveToCenter();
+//                    moveToEnemyBack(predictor);
+                    aim(predictor);
+                    break;
+
+                default: // many enemies
+                    out.println("move to edge");
+//                    predictor = map.getEnemies().iterator().next();
+//                    moveToEdge();
+//                    aim(predictor);
+            }
             scan();
         } while (true);
     }
 
-    public void onScannedRobot(ScannedRobotEvent e) {
-        robotLocation = new Point2D.Double(getX(), getY());
-        enemyAbsoluteBearing = getHeadingRadians() + e.getBearingRadians();
-        enemyDistance = e.getDistance();
-        enemyLocation = vectorToLocation(enemyAbsoluteBearing, enemyDistance, robotLocation);
+    public void moveToCenter() {
+        moveTo(getBattleFieldWidth()/2, getBattleFieldHeight()/2);
+    }
 
-        move();
+    private void moveTo(double x, double y) {
+        double a;
+        setTurnRightRadians(Math.tan(
+                a = Math.atan2(x -= getX(), y -= getY())
+                        - getHeadingRadians()));
+        setAhead(Math.hypot(x, y) * Math.cos(a));
+    }
 
-        // Enemy absolute bearing
-        double absBearing = getHeadingRadians() + e.getBearingRadians();
+    public void aim(Predictor predictor) {
+        Point2D location = predictor.getPosition(getTime() + 1);
+        double x = location.getX();
+        double y = location.getY();
+        double angle = Math.tan(
+                        Math.atan2(x - getX(), y - getY())
+                        - getHeadingRadians());
+//        double absBearing = getHeadingRadians() + angle;
 
-        double radarTurn = absBearing - getRadarHeadingRadians();
-        setTurnRadarRightRadians(Utils.normalRelativeAngle(radarTurn));
+        double radarTurn = angle - getRadarHeadingRadians();
+//        setTurnRadarRightRadians(Utils.normalRelativeAngle(radarTurn));
 
         // find our enemy's location:
         double ex = enemyLocation.getX();
@@ -72,16 +110,16 @@ public class OneVersusOneGatlingGunsBot extends AdvancedRobot {
         double power = 0.5;
         // don't try to figure out the direction they're moving
         // they're not moving, just use the direction we had before
-        if (e.getVelocity() != 0)
+        if (predictor.current.velocity!= 0)
         {
-            if (Math.sin(e.getHeadingRadians()-absBearing)*e.getVelocity() < 0)
+            if (Math.sin(predictor.current.heading-angle)*predictor.current.velocity < 0)
                 direction = -1;
             else
                 direction = 1;
         }
         int[] currentStats = stats; // This seems silly, but I'm using it to
         // show something else later
-        GatlingGuns.WaveBullet newWave = new GatlingGuns.WaveBullet(getX(), getY(), absBearing, power,
+        GatlingGuns.WaveBullet newWave = new GatlingGuns.WaveBullet(getX(), getY(), angle, power,
                 direction, getTime(), currentStats);
 
         int bestindex = 15;	// initialize it to be in the middle, guessfactor 0.
@@ -94,12 +132,27 @@ public class OneVersusOneGatlingGunsBot extends AdvancedRobot {
                 / ((stats.length - 1) / 2);
         double angleOffset = direction * guessfactor * newWave.maxEscapeAngle();
         double gunAdjust = Utils.normalRelativeAngle(
-                absBearing - getGunHeadingRadians() + angleOffset);
+                angle - getGunHeadingRadians() + angleOffset);
         setTurnGunRightRadians(gunAdjust);
 
         if (setFireBullet(power) != null) {
             waves.add(newWave);
         }
+    }
+
+    public void onScannedRobot(ScannedRobotEvent e) {
+
+        robotLocation = new Point2D.Double(getX(), getY());
+        enemyAbsoluteBearing = getHeadingRadians() + e.getBearingRadians();
+        enemyDistance = e.getDistance();
+        enemyLocation = vectorToLocation(enemyAbsoluteBearing, enemyDistance, robotLocation);
+
+        map.updateEnemy(e.getName(), enemyLocation, e.getEnergy(), e.getHeading(), e.getVelocity());
+
+//        move();
+
+        // Enemy absolute bearing
+
     }
 
     // Always try to move a bit further away from the enemy.
@@ -206,63 +259,72 @@ public class OneVersusOneGatlingGunsBot extends AdvancedRobot {
         }
     }
 
-    class Predictor {
 
-        Info[] infos = new Info[100];
+    // ============================= MAP ==================================
+    class VirtualMap {
 
-        Predictor() {
+        final Map<String, Predictor> enemies = new HashMap<>();
 
-        }
+//        GatlingGunsRobot.Predictor getNearest(Point2D point) {
+//            double distance = Double.POSITIVE_INFINITY;
+//            GatlingGunsRobot.Predictor winer = null;
+//            for (GatlingGunsRobot.Predictor predictor : enemies.values()) {
+//                double estimation = calcDistance(point, predictor.getPosition(getTime() + 1));
+//                if (estimation < distance) {
+//                    distance = estimation;
+//                    winer = predictor;
+//                }
+//            }
+//            return winer;
+//        }
+//
+        void updateEnemy(String name, Point2D detected, double energy, double heading, double velocity) {
+            Predictor predictor = enemies.getOrDefault(name, new Predictor());
+            enemies.put(name, predictor);
 
-        Point2D getLocation(int turn) {
-            Info info = infos[turn];
-            if (info == null) {
-                info = new Info();
-            }
-            if (info.actual != null) {
-                return info.actual;
-            }
-            if (info.predicted != null) {
-                return info.predicted;
-            }
-            //predict?
-            //check turn if it's turn no 1, 2, or 3
-
-            Point2D previous = getLocation(turn-1);
-            Point2D previousPrevious = getLocation(turn-2);
-            //first pos = a
-            //second pos = b
-            //(x-a.x)/(b.x-a.x) = (y-a.y)/(b.y-a.y)
-            //c.x = b.x + (b.x - a.x)
-            //c.y = 2b.y - a.y
-            info.predicted = new Point2D.Double(2*previous.getX() - previousPrevious.getX(),
-                    2*previous.getY() - previousPrevious.getY());
-
-            infos[turn] = info;
-            return info.predicted;
-        }
-
-        void update(int turn, Point2D actual, double energy, double heading, double velocity) {
-            //get info
-            Info info = infos[turn];
-            if (info == null) {
-                info = new Info();
-            }
-            info.actual = actual;
-            info.energy = energy;
-            info.heading = heading;
-            info.velocity = velocity;
-
-            infos[turn] = info;
+            predictor.update(detected, energy, heading, velocity);
         }
     }
 
-    class Info {
-        Point2D predicted;
-        Point2D actual;
+    class Predictor {
+        private RobotInfo current;
+        private RobotInfo previous;
+
+        void update(Point2D detected, double energy, double heading, double velocity) {
+            out.println("update info");
+            previous = current;
+            current = new RobotInfo();
+            current.pos = detected;
+            current.energy = energy;
+            current.heading = heading;
+            current.velocity = velocity;
+            current.turn = getTime();
+        }
+
+        Point2D getPosition(long turn) {
+            out.println("Predict for turn " + turn);
+            double tau = turn - current.turn;;
+            double dx;
+            double dy;
+            if (previous == null) {
+                dx = current.velocity * Math.sin(current.heading);
+                dy = current.velocity * Math.cos(current.heading);
+            } else {
+                dx = current.pos.getX() - previous.pos.getX();
+                dy = current.pos.getY() - previous.pos.getY();
+            }
+            return new Point2D.Double(current.pos.getX() + dx * tau, current.pos.getY() + dy * tau);
+        }
+    }
+
+    class RobotInfo {
+        Point2D pos;
         double energy;
         double heading;
         double velocity;
-
+        long turn;
     }
+
+
 }
+
